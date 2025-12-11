@@ -1,88 +1,80 @@
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import PlainTextResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime
 from dotenv import load_dotenv
-from io import BytesIO
-import os
 from pymongo import MongoClient
 from bson.objectid import ObjectId
+from io import BytesIO
 from reportlab.pdfgen import canvas
+import os
 
-# .env унших
+# ----------- ENV Ачааллах -----------
 load_dotenv()
 
 MONGODB_URI = os.getenv("MONGODB_URI")
 if not MONGODB_URI:
     raise RuntimeError("MONGODB_URI тохиргоо .env файлд алга байна.")
 
+# ----------- Mongo DB -----------
 client = MongoClient(MONGODB_URI)
 db = client["intax_db"]
 acceptance_col = db["acceptance"]
 
+# ----------- FastAPI -----------
 app = FastAPI(title="INTAX Audit Backend (Python)")
 
-# ---------- CORS тохиргоо ----------
+# ----------- CORS зөвшөөрөх -----------
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],        # Хүсвэл зөвхөн фронтендийн URL-ыг тавьж болно
-    allow_credentials=True,
+    allow_origins=["*"],      # Frontend-ийн domain-ийг энд тавьж болно
     allow_methods=["*"],
     allow_headers=["*"],
+    allow_credentials=True,
 )
 
-# ---------- Pydantic models ----------
+# ----------- Data Models -----------
 class AcceptanceIn(BaseModel):
     clientType: str
     companyName: str
     revenue: Optional[str] = ""
     totalAssets: Optional[str] = ""
 
-
 class AcceptanceOut(AcceptanceIn):
     id: str
     createdAt: datetime
 
-
 class DocumentRequest(BaseModel):
-    type: str   # contract | engagement | management
+    type: str
     companyName: str
 
-
-# ---------- Routes ----------
+# ----------- Root -----------
 @app.get("/", response_class=PlainTextResponse)
 def root():
-    return (
-        "INTAX Audit Backend (Python) ажиллаж байна. "
-        "/acceptance GET/POST бэлэн, /documents/generate PDF бэлэн."
-    )
+    return "INTAX Audit Backend (Python) ажиллаж байна. /acceptance POST/GET, /documents/generate PDF бэлэн."
 
-
+# ----------- POST /acceptance -----------
 @app.post("/acceptance")
 def create_acceptance(data: AcceptanceIn):
     doc = {
         "clientType": data.clientType,
         "companyName": data.companyName,
-        "revenue": data.revenue or "",
-        "totalAssets": data.totalAssets or "",
+        "revenue": data.revenue,
+        "totalAssets": data.totalAssets,
         "createdAt": datetime.utcnow(),
     }
     result = acceptance_col.insert_one(doc)
     doc["id"] = str(result.inserted_id)
-    return {
-        "success": True,
-        "message": "Мэдээлэл амжилттай хадгалагдлаа!",
-        "record": doc,
-    }
+    return {"success": True, "message": "Мэдээлэл амжилттай хадгалагдлаа!", "record": doc}
 
-
+# ----------- GET /acceptance -----------
 @app.get("/acceptance", response_model=List[AcceptanceOut])
 def list_acceptance():
-    items: List[AcceptanceOut] = []
+    results = []
     for d in acceptance_col.find().sort("createdAt", -1):
-        items.append(
+        results.append(
             AcceptanceOut(
                 id=str(d["_id"]),
                 clientType=d["clientType"],
@@ -92,54 +84,47 @@ def list_acceptance():
                 createdAt=d["createdAt"],
             )
         )
-    return items
+    return results
 
-
+# ----------- POST /documents/generate -----------
 @app.post("/documents/generate")
 def generate_document(req: DocumentRequest):
-    if req.type not in {"contract", "engagement", "management"}:
-        raise HTTPException(status_code=400, detail="type буруу байна.")
 
-    # PDF-ээ санах ой дээр үүсгэнэ
+    if req.type not in ["contract", "engagement", "management"]:
+        raise HTTPException(status_code=400, detail="type буруу байна")
+
     buffer = BytesIO()
     p = canvas.Canvas(buffer)
 
-    # Гарчиг
     if req.type == "contract":
         title = "АУДИТЫН ҮЙЛЧИЛГЭЭ ҮЗҮҮЛЭХ ГЭРЭЭ"
-        filename_base = "Audit_Contract"
+        filename = "Audit_Contract"
     elif req.type == "engagement":
         title = "АУДИТЫН ГЭРЭЭТ АЖЛЫН ЗАХИДАЛ"
-        filename_base = "Engagement_Letter"
+        filename = "Engagement_Letter"
     else:
         title = "УДИРДЛАГЫН ХАРИУЦЛАГЫН ЗАХИДАЛ"
-        filename_base = "Management_Letter"
+        filename = "Management_Letter"
 
     p.setFont("Helvetica-Bold", 16)
     p.drawCentredString(300, 780, "INTAX АУДИТЫН ҮЙЛЧИЛГЭЭ")
-    p.setFont("Helvetica", 12)
+    p.setFont("Helvetica", 13)
     p.drawCentredString(300, 760, title)
 
     p.setFont("Helvetica", 11)
     p.drawString(50, 720, f"Компанийн нэр: {req.companyName}")
     p.drawString(50, 700, f"Огноо: {datetime.utcnow().date()}")
 
-    p.drawString(
-        50,
-        660,
-        "Энэхүү PDF нь INTAX Audit Portal системээс автоматаар үүсэв."
-    )
+    p.drawString(50, 660, "Энэхүү PDF нь INTAX Audit Portal системээс автоматаар үүсэв.")
 
     p.showPage()
     p.save()
-    buffer.seek(0)
 
-    filename = f"{filename_base}_{req.companyName}.pdf"
+    buffer.seek(0)
+    file_name = f"{filename}_{req.companyName}.pdf"
 
     return StreamingResponse(
         buffer,
         media_type="application/pdf",
-        headers={
-            "Content-Disposition": f'attachment; filename="{filename}"'
-        },
+        headers={"Content-Disposition": f'attachment; filename="{file_name}"'},
     )
