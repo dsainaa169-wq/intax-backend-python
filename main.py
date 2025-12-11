@@ -1,5 +1,6 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import PlainTextResponse, StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime
@@ -10,6 +11,7 @@ from pymongo import MongoClient
 from bson.objectid import ObjectId
 from reportlab.pdfgen import canvas
 
+# .env унших
 load_dotenv()
 
 MONGODB_URI = os.getenv("MONGODB_URI")
@@ -22,6 +24,15 @@ acceptance_col = db["acceptance"]
 
 app = FastAPI(title="INTAX Audit Backend (Python)")
 
+# ---------- CORS тохиргоо ----------
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],        # Хүсвэл зөвхөн фронтендийн URL-ыг тавьж болно
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # ---------- Pydantic models ----------
 class AcceptanceIn(BaseModel):
     clientType: str
@@ -29,9 +40,11 @@ class AcceptanceIn(BaseModel):
     revenue: Optional[str] = ""
     totalAssets: Optional[str] = ""
 
+
 class AcceptanceOut(AcceptanceIn):
     id: str
     createdAt: datetime
+
 
 class DocumentRequest(BaseModel):
     type: str   # contract | engagement | management
